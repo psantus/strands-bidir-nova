@@ -5,7 +5,10 @@ data "aws_caller_identity" "current" {}
 # -----------------------------------------------------------------------------
 
 locals {
-  src_hash  = sha1(join("", [for f in sort(fileset(var.agent_source_dir, "**/*.{py,txt}")) : filesha1("${var.agent_source_dir}/${f}")]))
+  src_hash = sha1(join("", [
+    for f in sort(fileset(var.agent_source_dir, "**/*.{py,txt}"))
+    : filesha1("${var.agent_source_dir}/${f}")
+  ]))
   image_tag = "src-${local.src_hash}"
 }
 
@@ -17,11 +20,15 @@ resource "aws_ecr_repository" "agent" {
   name                 = "${var.project_name}-${var.environment}-agent"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
-  image_scanning_configuration { scan_on_push = true }
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
 }
 
 resource "aws_ecr_lifecycle_policy" "agent" {
   repository = aws_ecr_repository.agent.name
+
   policy = jsonencode({
     rules = [{
       rulePriority = 1
@@ -33,25 +40,30 @@ resource "aws_ecr_lifecycle_policy" "agent" {
 }
 
 # -----------------------------------------------------------------------------
-# Docker build + push
+# Docker build + push (re-runs when source hash changes)
 # -----------------------------------------------------------------------------
 
 resource "terraform_data" "docker_push" {
   triggers_replace = local.image_tag
 
   provisioner "local-exec" {
-    environment = { AWS_PROFILE = var.aws_profile != null ? var.aws_profile : "" }
+    environment = {
+      AWS_PROFILE = var.aws_profile != null ? var.aws_profile : ""
+    }
     command = <<-EOF
       set -e
       SRC="$(cd "${var.agent_source_dir}" && pwd)"
       REGISTRY="${aws_ecr_repository.agent.repository_url}"
       REGION="${var.aws_region}"
+
       docker build --platform linux/arm64 \
         --build-arg BEDROCK_KB_ID="${var.knowledge_base_id}" \
         -t "$REGISTRY:${local.image_tag}" \
         -f "$SRC/Dockerfile" "$SRC"
+
       aws ecr get-login-password --region "$REGION" | \
         docker login --username AWS --password-stdin "$(echo $REGISTRY | cut -d/ -f1)"
+
       docker push "$REGISTRY:${local.image_tag}"
     EOF
   }
@@ -63,6 +75,7 @@ resource "terraform_data" "docker_push" {
 
 resource "aws_iam_role" "agentcore" {
   name = "${var.project_name}-${var.environment}-agentcore"
+
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -76,6 +89,7 @@ resource "aws_iam_role" "agentcore" {
 resource "aws_iam_role_policy" "agentcore" {
   name = "agentcore-permissions"
   role = aws_iam_role.agentcore.id
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -133,38 +147,13 @@ resource "aws_iam_role_policy" "agentcore" {
         Effect   = "Allow"
         Action   = ["ecr:GetAuthorizationToken"]
         Resource = "*"
-      },
-      {
-        Sid    = "KVSAccess"
-        Effect = "Allow"
-        Action = [
-          "kinesisvideo:DescribeSignalingChannel",
-          "kinesisvideo:GetSignalingChannelEndpoint",
-          "kinesisvideo:GetIceServerConfig",
-          "kinesisvideo:ConnectAsMaster",
-          "kinesisvideo:CreateSignalingChannel",
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "VPCNetworking"
-        Effect = "Allow"
-        Action = [
-          "ec2:CreateNetworkInterface",
-          "ec2:DescribeNetworkInterfaces",
-          "ec2:DeleteNetworkInterface",
-          "ec2:DescribeSubnets",
-          "ec2:DescribeSecurityGroups",
-          "ec2:DescribeVpcs",
-        ]
-        Resource = "*"
       }
     ]
   })
 }
 
 # -----------------------------------------------------------------------------
-# AgentCore Runtime (Docker / VPC / WebRTC)
+# AgentCore Runtime (Docker / WebSocket)
 # -----------------------------------------------------------------------------
 
 resource "aws_bedrockagentcore_agent_runtime" "this" {
@@ -177,20 +166,8 @@ resource "aws_bedrockagentcore_agent_runtime" "this" {
     }
   }
 
-  environment_variables = {
-    KVS_CHANNEL_NAME = var.kvs_channel_name
-    AWS_REGION       = var.aws_region
-    BEDROCK_KB_ID    = var.knowledge_base_id
-    CONTAINER_ENV    = "true"
-  }
-
   network_configuration {
-    network_mode = "VPC"
-
-    vpc_configuration {
-      subnet_ids         = var.private_subnet_ids
-      security_group_ids = [var.security_group_id]
-    }
+    network_mode = "PUBLIC"
   }
 
   protocol_configuration {
