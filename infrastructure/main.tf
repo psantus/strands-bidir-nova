@@ -11,7 +11,7 @@ terraform {
 
 provider "aws" {
   region  = var.aws_region
-  profile = "blog_admin"
+  profile = var.aws_profile
 
   default_tags {
     tags = {
@@ -45,7 +45,8 @@ module "auth" {
   project_name      = var.project_name
   environment       = var.environment
   callback_urls     = var.cognito_callback_urls
-  agent_runtime_arn = var.agent_runtime_arn
+  agent_runtime_arn = module.agent.agent_runtime_arn
+  users             = var.cognito_users
 }
 
 # CloudFront distribution for frontend (S3 origin only)
@@ -59,12 +60,33 @@ module "cdn" {
   frontend_bucket_regional_domain_name = module.storage.frontend_bucket_regional_domain_name
 }
 
-# ECR repository + AgentCore IAM role for agent Docker image
-module "container" {
-  source = "./modules/container"
+# -----------------------------------------------------------------------------
+# Agent Module - ECR, Docker build/push, AgentCore runtime
+# -----------------------------------------------------------------------------
+module "agent" {
+  source = "./modules/agent"
 
   project_name      = var.project_name
   environment       = var.environment
   aws_region        = var.aws_region
   knowledge_base_id = var.knowledge_base_id
+  agent_source_dir  = "${path.root}/../src"
+  aws_profile       = var.aws_profile
+}
+
+# -----------------------------------------------------------------------------
+# Frontend Module - Build, deploy to S3, invalidate CloudFront
+# -----------------------------------------------------------------------------
+module "frontend" {
+  source = "./modules/frontend"
+
+  frontend_source_dir        = "${path.root}/../frontend"
+  frontend_bucket_name       = module.storage.frontend_bucket_id
+  cloudfront_distribution_id = module.cdn.distribution_id
+  cognito_user_pool_id       = module.auth.user_pool_id
+  cognito_client_id          = module.auth.user_pool_client_id
+  cognito_identity_pool_id   = module.auth.identity_pool_id
+  aws_region                 = var.aws_region
+  agent_runtime_arn          = module.agent.agent_runtime_arn
+  aws_profile                = var.aws_profile
 }

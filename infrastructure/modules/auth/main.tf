@@ -125,8 +125,6 @@ resource "aws_iam_role" "cognito_authenticated" {
 
 # Only attach the AgentCore invoke policy when we have a real runtime ARN
 resource "aws_iam_role_policy" "agentcore_invoke" {
-  count = var.agent_runtime_arn != "" ? 1 : 0
-
   name = "agentcore-invoke"
   role = aws_iam_role.cognito_authenticated.id
 
@@ -152,5 +150,21 @@ resource "aws_cognito_identity_pool_roles_attachment" "main" {
 
   roles = {
     authenticated = aws_iam_role.cognito_authenticated.arn
+  }
+}
+
+# -----------------------------------------------------------------------------
+# Cognito Users
+# -----------------------------------------------------------------------------
+resource "aws_cognito_user" "this" {
+  for_each = var.users
+
+  user_pool_id = aws_cognito_user_pool.main.id
+  username     = each.key
+  password     = each.value
+
+  attributes = {
+    email          = each.key
+    email_verified = "true"
   }
 }

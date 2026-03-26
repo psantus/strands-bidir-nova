@@ -4,6 +4,12 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "aws_profile" {
+  description = "AWS CLI profile name"
+  type        = string
+  default     = null
+}
+
 variable "project_name" {
   description = "Project name for resource naming"
   type        = string
@@ -37,8 +43,8 @@ variable "cognito_callback_urls" {
   default     = ["http://localhost:5173"]
 }
 
-variable "agent_runtime_arn" {
-  description = "AgentCore Runtime ARN. Empty string skips the Cognito IAM policy for AgentCore."
-  type        = string
-  default     = ""
+variable "cognito_users" {
+  description = "Map of Cognito users to create (email => password)"
+  type        = map(string)
+  default     = {}
 }

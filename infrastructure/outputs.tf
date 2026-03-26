@@ -36,24 +36,28 @@ output "cloudfront_domain_name" {
   value       = module.cdn.distribution_domain_name
 }
 
-# Container
+# Agent
+output "agent_runtime_arn" {
+  description = "AgentCore Runtime ARN"
+  value       = module.agent.agent_runtime_arn
+}
+
+output "agent_runtime_id" {
+  description = "AgentCore Runtime ID"
+  value       = module.agent.agent_runtime_id
+}
+
 output "ecr_repository_url" {
   description = "ECR repository URL for agent image"
-  value       = module.container.repository_url
+  value       = module.agent.repository_url
 }
 
 output "agentcore_role_arn" {
   description = "IAM role ARN for AgentCore runtime"
-  value       = module.container.agentcore_role_arn
+  value       = module.agent.agentcore_role_arn
 }
 
 output "knowledge_base_id" {
-  description = "Bedrock Knowledge Base ID (pass-through from variable)"
+  description = "Bedrock Knowledge Base ID (pass-through)"
   value       = var.knowledge_base_id
-}
-
-# AgentCore (pass-through from variable, set after create-agent)
-output "agent_runtime_arn" {
-  description = "AgentCore Runtime ARN (set via terraform.tfvars after create-agent)"
-  value       = var.agent_runtime_arn
 }

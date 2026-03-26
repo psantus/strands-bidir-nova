@@ -4,8 +4,13 @@
 # Bedrock Knowledge Base ID for recipe search (required)
 knowledge_base_id = ""
 
-# AgentCore Runtime ARN (leave empty for first Terraform apply, fill in after make create-agent)
-agent_runtime_arn = ""
+# AWS CLI profile (optional)
+# aws_profile = "default"
+
+# Cognito users to create (email => password)
+# cognito_users = {
+#   "user@example.com" = "YourPassword1!"
+# }
 
 # Cognito callback URLs (add your CloudFront domain after first deploy)
 cognito_callback_urls = [

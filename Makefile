@@ -2,7 +2,7 @@
        docker-build docker-push create-agent deploy-agent agent-status \
        deploy-frontend setup-env
 
-AWS_PROFILE := blog_admin
+AWS_PROFILE := training
 AWS_REGION := us-east-1
 IMAGE_NAME := voice-recipe-agent
 TF_DIR := infrastructure
