@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# Generate frontend .env from Terraform values
+# Generate frontend .env.old from Terraform values
 # -----------------------------------------------------------------------------
 
 resource "local_file" "frontend_env" {

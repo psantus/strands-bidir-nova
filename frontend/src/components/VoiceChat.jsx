@@ -7,15 +7,8 @@ export default function VoiceChat() {
   const [isActive, setIsActive] = useState(false);
   const transcriptEndRef = useRef(null);
 
-  // In deployed mode, build the invoke URL from the runtime ARN.
-  // In local mode, useWebRTCSession defaults to the Vite proxy.
-  const invokeUrl = agentRuntimeArn
-    ? `https://bedrock-agentcore.${import.meta.env.VITE_REGION || 'us-east-1'}.amazonaws.com/runtimes/${encodeURIComponent(agentRuntimeArn)}/invocations`
-    : undefined;
-
-  // TODO: add signRequest for deployed mode SigV4 signing (Task 9)
   const { status, transcripts, connect, disconnect } = useWebRTCSession({
-    invokeUrl,
+    agentRuntimeArn: agentRuntimeArn || undefined,
   });
 
   useEffect(() => {

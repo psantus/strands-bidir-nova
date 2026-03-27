@@ -5,11 +5,10 @@ data "aws_caller_identity" "current" {}
 # -----------------------------------------------------------------------------
 
 locals {
-  src_hash = sha1(join("", [
-    for f in sort(fileset(var.agent_source_dir, "**/*.{py,txt}"))
-    : filesha1("${var.agent_source_dir}/${f}")
-  ]))
-  image_tag = "src-${local.src_hash}"
+  # Hash ALL files that go into the Docker image (exclude __pycache__, .pyc, .dockerignore)
+  all_src_files = [for f in fileset(var.agent_source_dir, "**") : f if !can(regex("__pycache__|\\.pyc$|\\.pyo$|\\.dockerignore$", f))]
+  src_hash      = sha1(join("", [for f in sort(local.all_src_files) : filesha1("${var.agent_source_dir}/${f}")]))
+  image_tag     = "src-${local.src_hash}"
 }
 
 # -----------------------------------------------------------------------------
@@ -20,15 +19,11 @@ resource "aws_ecr_repository" "agent" {
   name                 = "${var.project_name}-${var.environment}-agent"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
+  image_scanning_configuration { scan_on_push = true }
 }
 
 resource "aws_ecr_lifecycle_policy" "agent" {
   repository = aws_ecr_repository.agent.name
-
   policy = jsonencode({
     rules = [{
       rulePriority = 1
@@ -40,30 +35,25 @@ resource "aws_ecr_lifecycle_policy" "agent" {
 }
 
 # -----------------------------------------------------------------------------
-# Docker build + push (re-runs when source hash changes)
+# Docker build + push
 # -----------------------------------------------------------------------------
 
 resource "terraform_data" "docker_push" {
   triggers_replace = local.image_tag
 
   provisioner "local-exec" {
-    environment = {
-      AWS_PROFILE = var.aws_profile != null ? var.aws_profile : ""
-    }
+    environment = { AWS_PROFILE = var.aws_profile != null ? var.aws_profile : "" }
     command = <<-EOF
       set -e
       SRC="$(cd "${var.agent_source_dir}" && pwd)"
       REGISTRY="${aws_ecr_repository.agent.repository_url}"
       REGION="${var.aws_region}"
-
       docker build --platform linux/arm64 \
         --build-arg BEDROCK_KB_ID="${var.knowledge_base_id}" \
         -t "$REGISTRY:${local.image_tag}" \
         -f "$SRC/Dockerfile" "$SRC"
-
       aws ecr get-login-password --region "$REGION" | \
         docker login --username AWS --password-stdin "$(echo $REGISTRY | cut -d/ -f1)"
-
       docker push "$REGISTRY:${local.image_tag}"
     EOF
   }
@@ -75,7 +65,6 @@ resource "terraform_data" "docker_push" {
 
 resource "aws_iam_role" "agentcore" {
   name = "${var.project_name}-${var.environment}-agentcore"
-
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -89,7 +78,6 @@ resource "aws_iam_role" "agentcore" {
 resource "aws_iam_role_policy" "agentcore" {
   name = "agentcore-permissions"
   role = aws_iam_role.agentcore.id
-
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -147,13 +135,38 @@ resource "aws_iam_role_policy" "agentcore" {
         Effect   = "Allow"
         Action   = ["ecr:GetAuthorizationToken"]
         Resource = "*"
+      },
+      {
+        Sid    = "KVSAccess"
+        Effect = "Allow"
+        Action = [
+          "kinesisvideo:DescribeSignalingChannel",
+          "kinesisvideo:GetSignalingChannelEndpoint",
+          "kinesisvideo:GetIceServerConfig",
+          "kinesisvideo:ConnectAsMaster",
+          "kinesisvideo:CreateSignalingChannel",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "VPCNetworking"
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DeleteNetworkInterface",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeVpcs",
+        ]
+        Resource = "*"
       }
     ]
   })
 }
 
 # -----------------------------------------------------------------------------
-# AgentCore Runtime (Docker / WebSocket)
+# AgentCore Runtime (Docker / VPC / WebRTC)
 # -----------------------------------------------------------------------------
 
 resource "aws_bedrockagentcore_agent_runtime" "this" {
@@ -166,8 +179,20 @@ resource "aws_bedrockagentcore_agent_runtime" "this" {
     }
   }
 
+  environment_variables = {
+    KVS_CHANNEL_NAME = var.kvs_channel_name
+    AWS_REGION       = var.aws_region
+    BEDROCK_KB_ID    = var.knowledge_base_id
+    CONTAINER_ENV    = "true"
+  }
+
   network_configuration {
-    network_mode = "PUBLIC"
+    network_mode = "VPC"
+
+    network_mode_config {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.security_group_id]
+    }
   }
 
   protocol_configuration {

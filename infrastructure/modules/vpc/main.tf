@@ -1,9 +1,5 @@
-data "aws_availability_zones" "available" {
-  state = "available"
-}
-
 locals {
-  azs = slice(data.aws_availability_zones.available.names, 0, 2)
+  azs = var.availability_zones
 }
 
 resource "aws_vpc" "main" {

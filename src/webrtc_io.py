@@ -17,6 +17,7 @@ class WebRTCBidiInput:
 
     def __init__(self, track):
         self._track = track
+        self._frame_count = 0
 
     async def __call__(self):
         try:
@@ -27,6 +28,9 @@ class WebRTCBidiInput:
         pcm = b"".join(f.planes[0] for f in resampled) if resampled else b""
         if not pcm:
             return await self()
+        self._frame_count += 1
+        if self._frame_count % 500 == 1:
+            logger.info("WebRTCBidiInput: sent %d audio frames (%d bytes)", self._frame_count, len(pcm))
         return {
             "type": "bidi_audio_input",
             "audio": base64.b64encode(pcm).decode("utf-8"),

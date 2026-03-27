@@ -28,6 +28,7 @@ from webrtc_io import WebRTCBidiInput, WebRTCBidiOutput
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+logging.getLogger("awscrt").setLevel(logging.CRITICAL)
 
 if not logging.getLogger().isEnabledFor(logging.DEBUG):
 
@@ -39,11 +40,15 @@ if not logging.getLogger().isEnabledFor(logging.DEBUG):
 
 IS_CONTAINER = os.environ.get("CONTAINER_ENV")
 
-# Initialize KVS for TURN credentials (container mode only)
-if IS_CONTAINER:
-    import kvs
+_kvs_initialized = False
 
-    kvs.init()
+
+def _ensure_kvs():
+    global _kvs_initialized
+    if not _kvs_initialized and IS_CONTAINER:
+        import kvs
+        kvs.init()
+        _kvs_initialized = True
 
 app = FastAPI(title="Family Recipe Assistant Voice Server")
 
@@ -107,6 +112,7 @@ async def invocations(request: dict, background_tasks: BackgroundTasks):
 def _handle_ice_config():
     if not IS_CONTAINER:
         return {"iceServers": []}
+    _ensure_kvs()
     import kvs as _kvs
 
     return {
@@ -119,9 +125,10 @@ def _handle_ice_config():
 
 async def _handle_offer(data, background_tasks):
     if IS_CONTAINER:
+        _ensure_kvs()
         import kvs as _kvs
 
-        ice_servers = _kvs.get_rtc_ice_servers(AWS_REGION, client_id="server", turn_only=data.get("turnOnly", False))
+        ice_servers = _kvs.get_rtc_ice_servers(AWS_REGION, client_id="server", turn_only=True)
     else:
         ice_servers = []
 
@@ -142,15 +149,38 @@ async def _handle_offer(data, background_tasks):
         logger.info("ICE state [%s]: %s", pc_id, pc.iceConnectionState)
 
     await pc.setRemoteDescription(RTCSessionDescription(sdp=data["sdp"], type=data["type"]))
+
+    # Add browser's ICE candidates if included in the offer
+    for c in data.get("candidates", []):
+        try:
+            raw = c.get("candidate", "")
+            if raw.startswith("candidate:"):
+                raw = raw.split(":", 1)[1]
+            candidate = candidate_from_sdp(raw)
+            candidate.sdpMid = c.get("sdp_mid")
+            candidate.sdpMLineIndex = c.get("sdp_mline_index")
+            await pc.addIceCandidate(candidate)
+        except Exception as e:
+            logger.error("ICE candidate error: %s", e)
+
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
-    return {"pc_id": pc_id, "sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+    sdp = pc.localDescription.sdp
+    # In deployed mode, strip non-relay candidates from SDP so browser only sees TURN relays
+    if IS_CONTAINER:
+        sdp = "\r\n".join(
+            line for line in sdp.split("\r\n")
+            if not line.startswith("a=candidate:") or "typ relay" in line
+        )
+
+    return {"pc_id": pc_id, "sdp": sdp, "type": pc.localDescription.type}
 
 
 async def _handle_ice_candidate(data):
     pc = peer_connections.get(data.get("pc_id"))
     if not pc:
+        logger.warning("ICE candidate: pc_id %s not found", data.get("pc_id"))
         return {"status": "ok"}
     for c in data.get("candidates", []):
         try:
@@ -161,6 +191,7 @@ async def _handle_ice_candidate(data):
             candidate.sdpMid = c.get("sdp_mid")
             candidate.sdpMLineIndex = c.get("sdp_mline_index")
             await pc.addIceCandidate(candidate)
+            logger.info("Added ICE candidate: %s", c.get("candidate", "")[:80])
         except Exception as e:
             logger.error("ICE candidate error: %s", e)
     return {"status": "ok"}
