@@ -1,9 +1,25 @@
+# -----------------------------------------------------------------------------
+# Optional random suffix for globally unique bucket names
+# -----------------------------------------------------------------------------
+resource "random_id" "bucket_suffix" {
+  count       = var.unique_bucket_suffix ? 1 : 0
+  byte_length = 4
+  keepers = {
+    project_name = var.project_name
+    environment  = var.environment
+  }
+}
+
+locals {
+  bucket_suffix = var.unique_bucket_suffix ? "-${random_id.bucket_suffix[0].hex}" : ""
+}
+
 # S3 bucket for frontend static files
 resource "aws_s3_bucket" "frontend" {
-  bucket = "${var.project_name}-${var.environment}-frontend"
+  bucket = "${var.project_name}-${var.environment}-frontend${local.bucket_suffix}"
 
   tags = {
-    Name = "${var.project_name}-${var.environment}-frontend"
+    Name = "${var.project_name}-${var.environment}-frontend${local.bucket_suffix}"
   }
 }
 

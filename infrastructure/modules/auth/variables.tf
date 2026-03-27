@@ -19,3 +19,9 @@ variable "agent_runtime_arn" {
   type        = string
   default     = ""
 }
+
+variable "users" {
+  description = "Map of users to create (email => permanent password)"
+  type        = map(string)
+  default     = {}
+}
