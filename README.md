@@ -16,36 +16,30 @@ Talk to a kitchen assistant that can:
 
 ## Architecture
 
-**Local mode:**
+**Transport:** WebRTC with KVS TURN relay (deployed) or direct P2P (local dev).
 
-![Local architecture](diagrams/architecture.png)
+The browser captures mic audio via the native WebRTC API and streams it to the agent over a peer connection. The agent runs Strands BidiAgent with Nova Sonic v2 and streams spoken responses back over the same WebRTC connection.
 
-**Deployed mode:**
+**Deployed mode:** AgentCore Runtime in a VPC with NAT gateway for KVS TURN egress. Browser connects via HTTP signaling to `/invocations` (SDP offer/answer + ICE candidates), then audio flows over WebRTC/UDP through the TURN relay.
 
-![Deployed architecture](diagrams/deployed-architecture.png)
-
-## Two Ways to Run
-
-**Local mode** - run entirely on your machine, no AWS infrastructure needed beyond Bedrock model access. Good for development and testing.
-
-**Deployed mode** - container on AgentCore Runtime with S3/CloudFront frontend and Cognito auth. The browser connects directly to AgentCore via SigV4-signed WebSocket.
+**Local mode:** Agent runs on your machine. No VPC, no TURN — WebRTC connects peer-to-peer on localhost. Signaling goes through the Vite dev proxy to the local FastAPI server.
 
 ## Prerequisites
 
 - **Python 3.13+** (3.12 minimum for Nova Sonic)
 - **Node.js 18+** for the Vite frontend dev server
 - **AWS account** with Bedrock model access enabled for Nova Sonic v2
-- **PortAudio** system library (build dependency of `strands-agents[bidi-all]`):
-  - macOS: `brew install portaudio`
-  - Ubuntu/Debian: `sudo apt install portaudio19-dev`
+- **System libraries** for aiortc/av:
+  - macOS: `brew install portaudio libav opus libvpx pkg-config`
+  - Ubuntu/Debian: `sudo apt install portaudio19-dev libavdevice-dev libopus-dev libvpx-dev pkg-config`
 - **uv** for Python dependency management: `curl -LsSf https://astral.sh/uv/install.sh | sh`
 
 ## Setup
 
 ```bash
 # Clone the repo
-git clone https://github.com/RDarrylR/serverless-family-recipes-bidirectional-nova-sonic.git
-cd serverless-family-recipes-bidirectional-nova-sonic
+git clone <repo-url>
+cd strands-bidir-nova
 
 # Install dependencies
 uv sync
@@ -53,23 +47,12 @@ make install-frontend
 
 # Configure AWS (must have Nova Sonic v2 access in your region)
 export AWS_REGION=us-east-1
-
-# Optional: USDA API key for nutrition lookups (DEMO_KEY works for testing)
-export USDA_API_KEY=your_key_here
-
-# Optional: Bedrock Knowledge Base ID for recipe search
-export BEDROCK_KB_ID=your_kb_id_here
-
-# Optional: change the voice (tiffany, amy, or puck - must be lowercase)
-export NOVA_SONIC_VOICE=tiffany
 ```
 
 ## Running Locally
 
-The browser-based frontend uses the Web Audio API for echo cancellation, so you can use laptop speakers and mic directly - no headset required.
-
 ```bash
-# Terminal 1: Start the WebSocket server
+# Terminal 1: Start the server (WebRTC signaling + BidiAgent)
 make serve
 
 # Terminal 2: Start the Vite dev server
@@ -78,70 +61,47 @@ make serve-frontend
 
 Open [http://localhost:5173](http://localhost:5173), click the microphone button, and start talking.
 
-In local mode, the Vite dev server proxies WebSocket connections to the local FastAPI server - no authentication required.
+In local mode, WebRTC connects peer-to-peer (no TURN needed). The Vite dev server proxies `/invocations` to the local FastAPI server.
 
 ## Deploying to AWS
 
-The deployed architecture uses AgentCore Runtime (container), CloudFront + S3 for the frontend, and Cognito for authentication. The browser connects directly to AgentCore via SigV4-signed WebSocket - no Lambda or API Gateway in the path.
+The deployed architecture uses AgentCore Runtime in a VPC, KVS TURN for WebRTC media relay, CloudFront + S3 for the frontend, and Cognito for authentication.
 
 **Additional prerequisites:**
 
 - **Terraform** for infrastructure provisioning
 - **Docker** for building the container image
-- **AWS CLI v2** with `bedrock-agentcore-control` plugin
 
 **Steps:**
 
 ```bash
 # 1. Create terraform.tfvars from the example template
 cp infrastructure/terraform.tfvars.example infrastructure/terraform.tfvars
-# Edit terraform.tfvars: set knowledge_base_id to your Bedrock KB ID
+# Edit terraform.tfvars: set knowledge_base_id, cognito_users
 
-# 2. Provision infrastructure (S3, CloudFront, Cognito, ECR)
+# 2. Provision everything (VPC, Cognito, CDN, AgentCore, frontend deploy)
 make plan
 make apply
-
-# 3. Build and push the container image
-make docker-build
-make docker-push
-
-# 4. Create the AgentCore runtime (first time only)
-make create-agent
-
-# 5. Update terraform.tfvars with agent_runtime_arn from step 4
-# 6. Re-apply Terraform to create Cognito IAM policy with the runtime ARN
-make apply
-
-# 7. Generate frontend .env from Terraform outputs
-make setup-env
-
-# 8. Build and deploy frontend to S3
-make deploy-frontend
-
-# 9. Create a Cognito user
-aws cognito-idp admin-create-user \
-  --user-pool-id <pool-id> \
-  --username <email> \
-  --user-attributes Name=email,Value=<email> Name=email_verified,Value=true \
-  --profile blog_admin
 ```
 
-For subsequent deploys (code changes only):
-
-```bash
-make deploy-agent     # Rebuild container + update AgentCore runtime
-make deploy-frontend  # Rebuild React app + sync to S3
-```
-
-**Post-deploy:** Verify the AgentCore runtime role has the correct Bedrock permissions. The model ARN for Nova Sonic v2 is `amazon.nova-2-sonic-v1:0` - see the IAM gotcha in the troubleshooting section below.
+A single `terraform apply` handles:
+- VPC with private subnets + NAT gateway
+- ECR repository + Docker image build/push
+- AgentCore runtime creation (VPC mode)
+- KVS signaling channel (created by agent on first run)
+- Cognito user pool + users
+- Frontend build + S3 deploy + CloudFront invalidation
 
 ## Project Structure
 
 ```
-bidir_streaming/
+strands-bidir-nova/
 ├── src/
-│   ├── server.py             # WebSocket server (FastAPI, local + container)
+│   ├── server.py             # FastAPI server (WebRTC signaling + BidiAgent)
 │   ├── config.py             # Model config, system prompt
+│   ├── kvs.py                # KVS signaling channel + TURN credentials
+│   ├── audio_track.py        # WebRTC output track (av.AudioFifo)
+│   ├── webrtc_io.py          # BidiInput/BidiOutput adapters for aiortc
 │   ├── Dockerfile            # ARM64 container for AgentCore
 │   ├── requirements.txt      # Container pip dependencies
 │   └── tools/
@@ -154,78 +114,45 @@ bidir_streaming/
 │   │   ├── App.jsx              # Root component (auth wrapper)
 │   │   ├── auth.js              # Cognito sign-in/sign-up/sign-out
 │   │   ├── aws-credentials.js   # Exchange JWT for temp AWS credentials
-│   │   ├── websocket-presigned.js # SigV4 presign AgentCore WebSocket URL
 │   │   ├── contexts/
 │   │   │   └── AuthContext.jsx    # Cognito auth state provider
 │   │   ├── components/
 │   │   │   ├── VoiceChat.jsx      # Mic button, status, transcript display
 │   │   │   └── AuthScreen.jsx     # Sign-in form (deployed mode)
-│   │   ├── hooks/
-│   │   │   ├── useVoiceSession.js   # WebSocket lifecycle + message routing
-│   │   │   ├── useAudioCapture.js   # Mic capture (16kHz, echo cancellation)
-│   │   │   └── useAudioPlayback.js  # AudioWorklet playback (24kHz)
-│   │   └── audio/
-│   │       ├── audioUtils.js          # PCM16/Float32/base64 conversions
-│   │       └── audio-player-processor.js  # AudioWorklet 60s ring buffer
+│   │   └── hooks/
+│   │       └── useWebRTCSession.js  # WebRTC lifecycle (ICE, SDP, peer connection)
 │   ├── .env.example          # Template for deployed mode env vars
 │   ├── package.json
 │   ├── vite.config.js
 │   └── index.html
 ├── infrastructure/           # Terraform modules
 │   └── modules/
+│       ├── vpc/              # VPC, subnets, NAT gateway, security group
+│       ├── agent/            # ECR, IAM, Docker build, AgentCore runtime
 │       ├── bedrock/          # IAM role for local dev (Bedrock access)
 │       ├── storage/          # S3 frontend bucket
 │       ├── auth/             # Cognito user pool + identity pool
 │       ├── cdn/              # CloudFront distribution (S3 origin)
-│       └── container/        # ECR repository + AgentCore IAM role
-├── diagrams/                # Architecture diagrams (.png)
+│       └── frontend/         # Frontend build + S3 deploy
 ├── pyproject.toml            # uv project config
 └── Makefile                  # Common commands
 ```
-
-## Available Make Commands
-
-| Command | Description |
-|---------|-------------|
-| **Local dev** | |
-| `make serve` | Run the WebSocket server for browser frontend |
-| `make serve-frontend` | Run the Vite dev server (localhost:5173) |
-| `make install-frontend` | Install frontend npm dependencies |
-| `make init` | Install Python dependencies |
-| `make lint` | Run ruff linter |
-| `make fmt` | Format code with ruff |
-| **Infrastructure** | |
-| `make plan` | Terraform plan |
-| `make apply` | Terraform apply |
-| **Deployment** | |
-| `make docker-build` | Build ARM64 Docker image for AgentCore |
-| `make docker-push` | Push image to ECR |
-| `make create-agent` | Create AgentCore runtime (first time only) |
-| `make deploy-agent` | Build, push, and update AgentCore runtime |
-| `make agent-status` | Check AgentCore runtime status |
-| `make deploy-frontend` | Build React app + S3 sync + CloudFront invalidation |
-| `make setup-env` | Generate frontend .env from Terraform outputs |
 
 ## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| Audio bunched together (no pauses) | Client-side AudioWorklet uses a 60-second ring buffer with overflow protection. If audio still sounds rushed, check `audio-player-processor.js` buffer size |
-| Nova Sonic silently ignores audio | **IAM model ID gotcha**: The foundation model ARN is `amazon.nova-2-sonic-v1:0`, not `amazon.nova-sonic-v2`. If your IAM policy uses the wrong model ID pattern, the BidiAgent connects but the model silently fails to process audio. Check the IAM policy on your AgentCore runtime role |
-| awscrt traceback on disconnect | Cosmetic - AWS CRT cancelled-future race condition on session close. Harmless, cannot be suppressed |
-| No logs in CloudWatch | The container needs `aws-opentelemetry-distro` and the `opentelemetry-instrument` CMD wrapper for log capture |
-| Browser mic permission denied | Click the lock icon in the URL bar and allow microphone access |
+| No audio from agent | Check browser console for WebRTC ICE connection state. In local mode, ensure the server is running on port 8080 |
+| ICE connection failed (deployed) | Verify VPC has NAT gateway with internet egress. Check agent role has KVS permissions |
+| Nova Sonic silently ignores audio | IAM model ID gotcha: foundation model ARN is `amazon.nova-2-sonic-v1:0`, not `amazon.nova-sonic-v2` |
 | Session cuts off at 8 min | Nova Sonic v2 limit - restart the session |
-| PortAudio not found | Install with `brew install portaudio` (macOS) or `apt install portaudio19-dev` (Linux). Build dependency of `strands-agents[bidi-all]` |
-| WebSocket connection refused (local) | Make sure `make serve` is running on port 8000 |
-| WebSocket connection refused (deployed) | Check Cognito credentials, AgentCore runtime status (`make agent-status`), and IAM permissions on the Cognito identity pool role |
-
-## Future: Combining with the Text-Based Assistant
-
-This voice assistant and the [text-based Serverless Recipe Assistant](https://darryl-ruggles.cloud/serverless-recipe-assistant-with-agentcore-and-strands/) share the same Bedrock Knowledge Base and similar tool implementations, but have separate infrastructure and deployment pipelines. The plan is to merge them into a single app with both input modes - text chat via SSE/Lambda and voice via WebSocket/AgentCore - behind a single CloudFront distribution with shared Cognito auth. See the "Converging Voice and Text" section in the [blog post](https://darryl-ruggles.cloud/bi-directional-voice-controlled-recipe-assistant-with-nova-sonic-2/) for details.
+| Browser mic permission denied | Click the lock icon in the URL bar and allow microphone access |
+| Docker build fails | Ensure Docker Desktop is running. ARM64 build requires Docker buildx |
 
 ## Related
 
-- [Serverless Recipe Assistant](https://darryl-ruggles.cloud/serverless-recipe-assistant-with-agentcore-and-strands/) - The text-based version this extends
+- [Serverless Recipe Assistant](https://darryl-ruggles.cloud/serverless-recipe-assistant-with-agentcore-and-strands/) - The text-based version
 - [Strands BidiAgent docs](https://strandsagents.com/latest/documentation/docs/user-guide/concepts/bidirectional-streaming/quickstart/)
 - [Nova Sonic v2 docs](https://docs.aws.amazon.com/nova/latest/nova2-userguide/sonic-integrations.html)
+- [WebRTC on AgentCore](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-webrtc.html)
+- [AWS WebRTC sample](https://github.com/awslabs/amazon-bedrock-agentcore-samples/tree/main/01-tutorials/01-AgentCore-runtime/06-bi-directional-streaming-webrtc)

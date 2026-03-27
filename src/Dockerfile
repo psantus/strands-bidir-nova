@@ -1,13 +1,18 @@
 # Build for ARM64 (required by AgentCore Runtime)
 FROM --platform=linux/arm64 public.ecr.aws/docker/library/python:3.13-slim
 
-# Install system dependencies required by strands-agents[bidi-all]
+# Install system dependencies for strands-agents[bidi-all], aiortc, and av
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     libasound-dev \
     libportaudio2 \
     libportaudiocpp0 \
     portaudio19-dev \
+    libavdevice-dev \
+    libavfilter-dev \
+    libopus-dev \
+    libvpx-dev \
+    pkg-config \
     gcc \
     python3-dev && \
     apt-get clean && \
@@ -18,7 +23,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY config.py server.py ./
+COPY config.py server.py kvs.py audio_track.py webrtc_io.py ./
 COPY tools/ ./tools/
 
 # Non-root user

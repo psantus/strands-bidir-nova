@@ -10,7 +10,7 @@ build/
 # Environment
 .env
 .env.local
-frontend/.env
+frontend/.env.old
 
 # AgentCore
 src/.bedrock_agentcore.yaml
