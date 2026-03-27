@@ -41,10 +41,11 @@ class WebRTCBidiInput:
 
 
 class WebRTCBidiOutput:
-    """Receives BidiOutputEvents and routes audio to OutputTrack."""
+    """Receives BidiOutputEvents and routes audio to OutputTrack + optional Anam avatar."""
 
-    def __init__(self, output_track):
+    def __init__(self, output_track, anam=None):
         self._output_track = output_track
+        self._anam = anam
 
     async def __call__(self, event):
         if not isinstance(event, dict):
@@ -53,5 +54,9 @@ class WebRTCBidiOutput:
         if event_type == "bidi_audio_stream":
             audio_bytes = base64.b64decode(event["audio"])
             self._output_track.add_audio(audio_bytes)
+            if self._anam:
+                await self._anam.send_audio(audio_bytes)
         elif event_type == "bidi_interruption":
             self._output_track.clear()
+            if self._anam:
+                await self._anam.end_turn()

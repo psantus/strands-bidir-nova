@@ -48,3 +48,16 @@ variable "cognito_users" {
   type        = map(string)
   default     = {}
 }
+
+variable "anam_api_key" {
+  description = "Anam API key for avatar video (optional, leave empty to disable)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "anam_avatar_id" {
+  description = "Anam avatar ID (optional)"
+  type        = string
+  default     = ""
+}

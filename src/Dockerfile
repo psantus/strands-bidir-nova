@@ -23,7 +23,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY config.py server.py kvs.py audio_track.py webrtc_io.py ./
+COPY config.py server.py kvs.py audio_track.py video_track.py webrtc_io.py anam_avatar.py ./
 COPY tools/ ./tools/
 
 # Non-root user

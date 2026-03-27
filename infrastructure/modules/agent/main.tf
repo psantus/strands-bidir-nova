@@ -179,12 +179,18 @@ resource "aws_bedrockagentcore_agent_runtime" "this" {
     }
   }
 
-  environment_variables = {
-    KVS_CHANNEL_NAME = var.kvs_channel_name
-    AWS_REGION       = var.aws_region
-    BEDROCK_KB_ID    = var.knowledge_base_id
-    CONTAINER_ENV    = "true"
-  }
+  environment_variables = merge(
+    {
+      KVS_CHANNEL_NAME = var.kvs_channel_name
+      AWS_REGION       = var.aws_region
+      BEDROCK_KB_ID    = var.knowledge_base_id
+      CONTAINER_ENV    = "true"
+    },
+    var.anam_api_key != "" ? {
+      ANAM_API_KEY   = var.anam_api_key
+      ANAM_AVATAR_ID = var.anam_avatar_id
+    } : {}
+  )
 
   network_configuration {
     network_mode = "VPC"

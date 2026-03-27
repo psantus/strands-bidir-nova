@@ -13,8 +13,10 @@ const region = import.meta.env.VITE_REGION || 'us-east-1';
 export function useWebRTCSession({ agentRuntimeArn } = {}) {
   const [status, setStatus] = useState('disconnected');
   const [transcripts, setTranscripts] = useState([]);
+  const [hasVideo, setHasVideo] = useState(false);
   const pcRef = useRef(null);
   const sessionIdRef = useRef(null);
+  const videoRef = useRef(null);
 
   // Invoke the agent (local or deployed)
   const invoke = useCallback(async (action, data = {}) => {
@@ -68,9 +70,16 @@ export function useWebRTCSession({ agentRuntimeArn } = {}) {
       let canSend = false;
 
       pc.ontrack = (e) => {
-        const audio = new Audio();
-        audio.srcObject = e.streams[0];
-        audio.play().catch(() => {});
+        if (e.track.kind === 'video') {
+          setHasVideo(true);
+          if (videoRef.current) {
+            videoRef.current.srcObject = e.streams[0];
+          }
+        } else if (e.track.kind === 'audio') {
+          const audio = new Audio();
+          audio.srcObject = e.streams[0];
+          audio.play().catch(() => {});
+        }
       };
 
       pc.oniceconnectionstatechange = () => {
@@ -128,6 +137,7 @@ export function useWebRTCSession({ agentRuntimeArn } = {}) {
     }
     sessionIdRef.current = null;
     setStatus('disconnected');
+    setHasVideo(false);
   }, [invoke]);
 
   useEffect(() => {
@@ -139,5 +149,5 @@ export function useWebRTCSession({ agentRuntimeArn } = {}) {
     };
   }, []);
 
-  return { status, transcripts, connect, disconnect };
+  return { status, transcripts, hasVideo, videoRef, connect, disconnect };
 }

@@ -35,3 +35,14 @@ variable "kvs_channel_name" {
   type    = string
   default = "voice-agent-webrtc"
 }
+
+variable "anam_api_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "anam_avatar_id" {
+  type    = string
+  default = ""
+}

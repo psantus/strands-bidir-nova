@@ -7,7 +7,7 @@ export default function VoiceChat() {
   const [isActive, setIsActive] = useState(false);
   const transcriptEndRef = useRef(null);
 
-  const { status, transcripts, connect, disconnect } = useWebRTCSession({
+  const { status, transcripts, hasVideo, videoRef, connect, disconnect } = useWebRTCSession({
     agentRuntimeArn: agentRuntimeArn || undefined,
   });
 
@@ -63,6 +63,16 @@ export default function VoiceChat() {
 
       <p style={styles.status}>{statusText}</p>
 
+      {hasVideo && (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          style={styles.video}
+        />
+      )}
+
       {transcripts.length > 0 && (
         <div style={styles.transcriptArea}>
           {transcripts.map((t, i) => (
@@ -95,6 +105,7 @@ const styles = {
     transition: 'all 0.2s ease', marginBottom: '1rem',
   },
   status: { fontSize: '0.9rem', color: '#666666', marginBottom: '0.5rem' },
+  video: { width: '100%', maxWidth: 480, borderRadius: '12px', marginBottom: '1rem', background: '#000' },
   transcriptArea: {
     display: 'flex', flexDirection: 'column', gap: '0.75rem', width: '100%',
     maxHeight: 400, overflowY: 'auto', marginTop: '1.5rem', padding: '0 0.5rem',

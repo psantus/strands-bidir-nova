@@ -82,6 +82,8 @@ module "agent" {
   aws_profile        = var.aws_profile
   private_subnet_ids = module.vpc.private_subnet_ids
   security_group_id  = module.vpc.security_group_id
+  anam_api_key       = var.anam_api_key
+  anam_avatar_id     = var.anam_avatar_id
 }
 
 # -----------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""WebRTC + WebSocket server bridging browser audio to Strands BidiAgent and Nova Sonic.
+"""WebRTC server bridging browser audio to Strands BidiAgent, Nova Sonic, and Anam avatar.
 
 Exposes:
   POST /invocations — WebRTC signaling (ice_config, offer, ice_candidate, disconnect)
@@ -6,6 +6,7 @@ Exposes:
   GET  /ping        — Health check
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -39,6 +40,8 @@ if not logging.getLogger().isEnabledFor(logging.DEBUG):
     logging.getLogger("uvicorn.access").addFilter(_PingFilter())
 
 IS_CONTAINER = os.environ.get("CONTAINER_ENV")
+ANAM_API_KEY = os.environ.get("ANAM_API_KEY", "")
+ANAM_AVATAR_ID = os.environ.get("ANAM_AVATAR_ID", "")
 
 _kvs_initialized = False
 
@@ -49,6 +52,7 @@ def _ensure_kvs():
         import kvs
         kvs.init()
         _kvs_initialized = True
+
 
 app = FastAPI(title="Family Recipe Assistant Voice Server")
 
@@ -64,7 +68,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Shared Nova Sonic model config
 sonic_model = BidiNovaSonicModel(
     provider_config={
         "audio": {
@@ -81,7 +84,6 @@ sonic_model = BidiNovaSonicModel(
 
 TOOLS = [search_recipes, set_timer, nutrition_lookup, convert_units, stop_conversation]
 
-# Active peer connections
 peer_connections = {}
 
 
@@ -136,13 +138,21 @@ async def _handle_offer(data, background_tasks):
     audio_out = OutputTrack()
     pc.addTrack(audio_out)
 
+    # Add video track if Anam is configured
+    video_out = None
+    if ANAM_API_KEY:
+        from video_track import VideoOutputTrack
+
+        video_out = VideoOutputTrack()
+        pc.addTrack(video_out)
+
     pc_id = f"pc_{len(peer_connections)}"
     peer_connections[pc_id] = pc
 
     @pc.on("track")
     async def on_track(track):
         if track.kind == "audio":
-            background_tasks.add_task(_run_agent_session, track, audio_out, pc_id)
+            background_tasks.add_task(_run_agent_session, track, audio_out, video_out, pc_id)
 
     @pc.on("iceconnectionstatechange")
     async def on_ice_state():
@@ -150,7 +160,6 @@ async def _handle_offer(data, background_tasks):
 
     await pc.setRemoteDescription(RTCSessionDescription(sdp=data["sdp"], type=data["type"]))
 
-    # Add browser's ICE candidates if included in the offer
     for c in data.get("candidates", []):
         try:
             raw = c.get("candidate", "")
@@ -167,7 +176,6 @@ async def _handle_offer(data, background_tasks):
     await pc.setLocalDescription(answer)
 
     sdp = pc.localDescription.sdp
-    # In deployed mode, strip non-relay candidates from SDP so browser only sees TURN relays
     if IS_CONTAINER:
         sdp = "\r\n".join(
             line for line in sdp.split("\r\n")
@@ -204,9 +212,31 @@ async def _handle_disconnect(data):
     return {"status": "ok"}
 
 
-async def _run_agent_session(audio_track, output_track, pc_id):
-    """Run BidiAgent with WebRTC I/O adapters."""
+async def _run_agent_session(audio_track, output_track, video_out, pc_id):
+    """Run BidiAgent with WebRTC I/O adapters + optional Anam avatar."""
     logger.info("Starting BidiAgent session for %s", pc_id)
+
+    anam = None
+    if ANAM_API_KEY and video_out:
+        try:
+            from anam_avatar import AnamAvatar
+
+            anam = AnamAvatar(ANAM_API_KEY, ANAM_AVATAR_ID)
+            await anam.start()
+
+            # Background task: consume Anam video frames → push to VideoOutputTrack
+            async def _pump_video():
+                try:
+                    async for frame in anam.video_frames():
+                        video_out.push(frame)
+                except Exception as e:
+                    logger.debug("Anam video pump ended: %s", e)
+
+            asyncio.create_task(_pump_video())
+        except Exception as e:
+            logger.error("Anam avatar init failed: %s", e)
+            anam = None
+
     agent = BidiAgent(
         model=sonic_model,
         tools=TOOLS,
@@ -215,7 +245,7 @@ async def _run_agent_session(audio_track, output_track, pc_id):
     try:
         await agent.run(
             inputs=[WebRTCBidiInput(audio_track)],
-            outputs=[WebRTCBidiOutput(output_track)],
+            outputs=[WebRTCBidiOutput(output_track, anam=anam)],
         )
     except (Exception, StopAsyncIteration) as e:
         if type(e).__name__ != "StopAsyncIteration":
@@ -225,6 +255,8 @@ async def _run_agent_session(audio_track, output_track, pc_id):
             await agent.stop()
         except Exception:
             pass
+        if anam:
+            await anam.stop()
         logger.info("Agent session ended [%s]", pc_id)
 
 
