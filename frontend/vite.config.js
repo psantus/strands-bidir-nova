@@ -14,9 +14,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/ws': {
-        target: 'ws://localhost:8000',
-        ws: true,
+      '/invocations': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
       },
     },
   },

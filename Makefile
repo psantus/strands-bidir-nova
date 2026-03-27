@@ -9,9 +9,9 @@ TF_DIR := infrastructure
 
 # --- Local dev ---
 
-# Run the WebSocket server (browser frontend)
+# Run the server (WebRTC signaling + BidiAgent)
 serve:
-	cd src && AWS_PROFILE=$(AWS_PROFILE) uv run python -m uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+	cd src && AWS_PROFILE=$(AWS_PROFILE) uv run python -m uvicorn server:app --host 0.0.0.0 --port 8080 --reload
 
 # Run the frontend dev server
 serve-frontend:

@@ -60,18 +60,28 @@ module "cdn" {
   frontend_bucket_regional_domain_name = module.storage.frontend_bucket_regional_domain_name
 }
 
+# VPC for AgentCore WebRTC (private subnets + NAT for TURN egress)
+module "vpc" {
+  source = "./modules/vpc"
+
+  project_name = var.project_name
+  environment  = var.environment
+}
+
 # -----------------------------------------------------------------------------
-# Agent Module - ECR, Docker build/push, AgentCore runtime
+# Agent Module - ECR, Docker build/push, AgentCore runtime (VPC + WebRTC)
 # -----------------------------------------------------------------------------
 module "agent" {
   source = "./modules/agent"
 
-  project_name      = var.project_name
-  environment       = var.environment
-  aws_region        = var.aws_region
-  knowledge_base_id = var.knowledge_base_id
-  agent_source_dir  = "${path.root}/../src"
-  aws_profile       = var.aws_profile
+  project_name       = var.project_name
+  environment        = var.environment
+  aws_region         = var.aws_region
+  knowledge_base_id  = var.knowledge_base_id
+  agent_source_dir   = "${path.root}/../src"
+  aws_profile        = var.aws_profile
+  private_subnet_ids = module.vpc.private_subnet_ids
+  security_group_id  = module.vpc.security_group_id
 }
 
 # -----------------------------------------------------------------------------

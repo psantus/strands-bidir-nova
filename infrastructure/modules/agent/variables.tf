@@ -15,12 +15,23 @@ variable "knowledge_base_id" {
 }
 
 variable "agent_source_dir" {
-  description = "Path to the agent source directory (contains Dockerfile)"
-  type        = string
+  type = string
 }
 
 variable "aws_profile" {
-  description = "AWS CLI profile for Docker push"
-  type        = string
-  default     = null
+  type    = string
+  default = null
+}
+
+variable "private_subnet_ids" {
+  type = list(string)
+}
+
+variable "security_group_id" {
+  type = string
+}
+
+variable "kvs_channel_name" {
+  type    = string
+  default = "voice-agent-webrtc"
 }
