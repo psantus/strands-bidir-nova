@@ -56,11 +56,22 @@ export function useWebRTCSession({ agentRuntimeArn } = {}) {
     sessionIdRef.current = crypto.randomUUID();
 
     try {
-      // 1. Get ICE config
-      const { iceServers } = await invoke('ice_config');
+      // 1. Warmup: first call wakes the container, retry if it fails
+      let iceServers;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const config = await invoke('ice_config');
+          iceServers = config.iceServers || [];
+          break;
+        } catch (err) {
+          if (attempt === 2) throw err;
+          console.warn(`[WebRTC] ice_config attempt ${attempt + 1} failed, retrying...`);
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+      }
 
       // 2. Create peer connection
-      const pc = new RTCPeerConnection({ iceServers: iceServers || [] });
+      const pc = new RTCPeerConnection({ iceServers });
       pcRef.current = pc;
 
       // 3. Queue ICE candidates until we have a pc_id
@@ -111,12 +122,56 @@ export function useWebRTCSession({ agentRuntimeArn } = {}) {
         await invoke('ice_candidate', { pc_id: pc._pcId, candidates: [c] }).catch(() => {});
       }
 
+      // 7. Wait for ICE to actually connect (proves end-to-end works)
+      await new Promise((resolve, reject) => {
+        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+          return resolve();
+        }
+        const origHandler = pc.oniceconnectionstatechange;
+        const timeout = setTimeout(() => reject(new Error('ICE timeout')), 10000);
+        pc.oniceconnectionstatechange = () => {
+          const state = pc.iceConnectionState;
+          if (state === 'connected' || state === 'completed') {
+            clearTimeout(timeout);
+            pc.oniceconnectionstatechange = origHandler;
+            origHandler?.();
+            resolve();
+          } else if (state === 'failed' || state === 'closed') {
+            clearTimeout(timeout);
+            reject(new Error('ICE failed'));
+          }
+          origHandler?.();
+        };
+      });
+
       setStatus('connected');
     } catch (err) {
       console.error('[WebRTC] Connection failed:', err);
-      disconnect();
+      // Clean up failed attempt
+      if (pcRef.current) {
+        pcRef.current.getSenders().forEach((s) => s.track?.stop());
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+      throw err; // propagate to connectWithRetry
     }
   }, [invoke]);
+
+  // Retry wrapper: if connect fails (ICE timeout), retry once with a new session
+  const connectWithRetry = useCallback(async () => {
+    try {
+      await connect();
+    } catch (err) {
+      console.warn('[WebRTC] First attempt failed, retrying...', err.message);
+      sessionIdRef.current = crypto.randomUUID();
+      try {
+        await connect();
+      } catch (err2) {
+        console.error('[WebRTC] Retry also failed:', err2.message);
+        setStatus('disconnected');
+      }
+    }
+  }, [connect]);
 
   const disconnect = useCallback(async () => {
     if (pcRef.current) {
