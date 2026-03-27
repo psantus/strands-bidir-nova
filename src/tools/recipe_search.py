@@ -28,6 +28,8 @@ def search_recipes(query: str) -> str:
     if not BEDROCK_KB_ID:
         return "Error: Knowledge Base ID not configured. Set BEDROCK_KB_ID environment variable."
 
+    logger.info("search_recipes: raw query=%r", query)
+
     try:
         response = bedrock_agent_runtime.retrieve(
             knowledgeBaseId=BEDROCK_KB_ID,
@@ -64,14 +66,20 @@ def search_recipes(query: str) -> str:
                 source_chunks[source]["score"] = score
 
         if not source_chunks:
+            logger.info("search_recipes: no results above score threshold for query=%s", query)
             return "No recipes found with a strong enough match. Try a different search."
 
+        # Return top 3 by score
+        top = sorted(source_chunks.values(), key=lambda e: e["score"], reverse=True)[:3]
         chunks = []
-        for entry in source_chunks.values():
+        for entry in top:
             merged = "\n\n".join(entry["texts"])
             chunks.append(f"Recipe: {entry['name']} (score: {entry['score']:.2f})\n{merged}")
 
-        return f"Found {len(source_chunks)} recipe(s):\n\n" + "\n\n".join(chunks)
+        result = f"Found {len(top)} recipe(s):\n\n" + "\n\n".join(chunks)
+        logger.info("search_recipes: query=%s, found=%d recipes: %s", query, len(top),
+                     [(e['name'], f"{e['score']:.2f}") for e in top])
+        return result
 
     except Exception as e:
         logger.exception("Error searching recipe knowledge base")
